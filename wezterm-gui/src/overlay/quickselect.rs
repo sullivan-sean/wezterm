@@ -5,7 +5,6 @@ use config::ConfigHandle;
 use mux::domain::DomainId;
 use mux::pane::{Pane, PaneId, Pattern, SearchResult};
 use mux::renderable::*;
-use portable_pty::PtySize;
 use rangeset::RangeSet;
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
@@ -17,7 +16,9 @@ use termwiz::color::AnsiColor;
 use termwiz::surface::{SequenceNo, SEQ_ZERO};
 use url::Url;
 use wezterm_term::color::ColorPalette;
-use wezterm_term::{Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex};
+use wezterm_term::{
+    Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex, TerminalSize,
+};
 use window::WindowOps;
 
 const PATTERNS: [&str; 14] = [
@@ -288,7 +289,7 @@ impl Pane for QuickSelectOverlay {
         self.delegate.writer()
     }
 
-    fn resize(&self, size: PtySize) -> anyhow::Result<()> {
+    fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
         self.delegate.resize(size)
     }
 
@@ -721,19 +722,16 @@ impl QuickSelectRenderable {
                 if let Some(pane) = mux.get_pane(pane_id) {
                     {
                         let mut selection = term_window.selection(pane_id);
-                        let start = SelectionCoordinate {
-                            x: result.start_x,
-                            y: result.start_y,
-                        };
+                        let start = SelectionCoordinate::x_y(result.start_x, result.start_y);
                         selection.origin = Some(start);
                         selection.range = Some(SelectionRange {
                             start,
-                            end: SelectionCoordinate {
-                                // inclusive range for selection, but the result
-                                // range is exclusive
-                                x: result.end_x.saturating_sub(1),
-                                y: result.end_y,
-                            },
+                            // inclusive range for selection, but the result
+                            // range is exclusive
+                            end: SelectionCoordinate::x_y(
+                                result.end_x.saturating_sub(1),
+                                result.end_y,
+                            ),
                         });
                         // Ensure that selection doesn't get invalidated when
                         // the overlay is closed

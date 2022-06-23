@@ -1,4 +1,4 @@
-use crate::selection::{SelectionCoordinate, SelectionRange};
+use crate::selection::{SelectionCoordinate, SelectionRange, SelectionX};
 use crate::termwindow::{TermWindow, TermWindowNotif};
 use config::keyassignment::{
     CopyModeAssignment, KeyAssignment, KeyTable, KeyTableEntry, ScrollbackEraseMode, SelectionMode,
@@ -7,7 +7,6 @@ use mux::domain::DomainId;
 use mux::pane::{Pane, PaneId, Pattern, SearchResult};
 use mux::renderable::*;
 use mux::tab::TabId;
-use portable_pty::PtySize;
 use rangeset::RangeSet;
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
@@ -22,6 +21,7 @@ use url::Url;
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{
     unicode_column_width, Clipboard, KeyCode, KeyModifiers, Line, MouseEvent, StableRowIndex,
+    TerminalSize,
 };
 use window::{KeyCode as WKeyCode, Modifiers, WindowOps};
 
@@ -290,16 +290,8 @@ impl CopyRenderable {
         self.cursor.y = result.end_y;
         self.cursor.x = result.end_x.saturating_sub(1);
 
-        let start = SelectionCoordinate {
-            x: result.start_x,
-            y: result.start_y,
-        };
-        let end = SelectionCoordinate {
-            // inclusive range for selection, but the result
-            // range is exclusive
-            x: result.end_x.saturating_sub(1),
-            y: result.end_y,
-        };
+        let start = SelectionCoordinate::x_y(result.start_x, result.start_y);
+        let end = SelectionCoordinate::x_y(result.end_x.saturating_sub(1), result.end_y);
         self.start.replace(start);
         self.adjust_selection(start, SelectionRange { start, end });
     }
@@ -322,14 +314,34 @@ impl CopyRenderable {
     fn select_to_cursor_pos(&mut self) {
         self.clamp_cursor_to_scrollback();
         if let Some(start) = self.start {
-            let start = SelectionCoordinate {
-                x: start.x,
-                y: start.y,
+            let cursor_is_above_start = self.cursor.y < start.y;
+            let start = if self.selection_mode == SelectionMode::Line {
+                SelectionCoordinate::x_y(
+                    if cursor_is_above_start {
+                        usize::max_value()
+                    } else {
+                        0
+                    },
+                    start.y,
+                )
+            } else {
+                SelectionCoordinate {
+                    x: start.x,
+                    y: start.y,
+                }
             };
 
-            let end = SelectionCoordinate {
-                x: self.cursor.x,
-                y: self.cursor.y,
+            let end = if self.selection_mode == SelectionMode::Line {
+                SelectionCoordinate::x_y(
+                    if cursor_is_above_start {
+                        0
+                    } else {
+                        usize::max_value()
+                    },
+                    self.cursor.y,
+                )
+            } else {
+                SelectionCoordinate::x_y(self.cursor.x, self.cursor.y)
             };
 
             self.adjust_selection(start, SelectionRange { start, end });
@@ -591,6 +603,36 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
+    fn move_to_selection_other_end(&mut self) {
+        if let Some(old_start) = self.start {
+            // Swap cursor & start of selection
+            self.start
+                .replace(SelectionCoordinate::x_y(self.cursor.x, self.cursor.y));
+            self.cursor.x = match &old_start.x {
+                SelectionX::Cell(x) => *x,
+                SelectionX::BeforeZero => 0,
+            };
+            self.cursor.y = old_start.y;
+            self.select_to_cursor_pos();
+        }
+    }
+
+    fn move_to_selection_other_end_horiz(&mut self) {
+        if self.selection_mode != SelectionMode::Block {
+            return self.move_to_selection_other_end();
+        }
+        if let Some(old_start) = self.start {
+            // Swap X coordinate of cursor & start of selection
+            self.start
+                .replace(SelectionCoordinate::x_y(self.cursor.x, old_start.y));
+            self.cursor.x = match &old_start.x {
+                SelectionX::Cell(x) => *x,
+                SelectionX::BeforeZero => 0,
+            };
+            self.select_to_cursor_pos();
+        }
+    }
+
     fn move_backward_one_word(&mut self) {
         let y = if self.cursor.x == 0 && self.cursor.y > 0 {
             self.cursor.x = usize::max_value();
@@ -684,18 +726,6 @@ impl CopyRenderable {
         self.select_to_cursor_pos();
     }
 
-    fn toggle_selection_by_cell(&mut self) {
-        if self.start.take().is_none() {
-            let coord = SelectionCoordinate {
-                x: self.cursor.x,
-                y: self.cursor.y,
-            };
-            self.start.replace(coord);
-            self.select_to_cursor_pos();
-            self.selection_mode = SelectionMode::Cell;
-        }
-    }
-
     fn set_selection_mode(&mut self, mode: &Option<SelectionMode>) {
         match mode {
             None => {
@@ -703,14 +733,11 @@ impl CopyRenderable {
             }
             Some(mode) => {
                 if self.start.is_none() {
-                    let coord = SelectionCoordinate {
-                        x: self.cursor.x,
-                        y: self.cursor.y,
-                    };
+                    let coord = SelectionCoordinate::x_y(self.cursor.x, self.cursor.y);
                     self.start.replace(coord);
-                    self.select_to_cursor_pos();
                 }
                 self.selection_mode = *mode;
+                self.select_to_cursor_pos();
             }
         }
     }
@@ -741,7 +768,7 @@ impl Pane for CopyOverlay {
         self.delegate.writer()
     }
 
-    fn resize(&self, size: PtySize) -> anyhow::Result<()> {
+    fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
         self.delegate.resize(size)
     }
 
@@ -782,11 +809,12 @@ impl Pane for CopyOverlay {
                     MoveToViewportMiddle => render.move_to_viewport_middle(),
                     MoveToScrollbackTop => render.move_to_top(),
                     MoveToScrollbackBottom => render.move_to_bottom(),
-                    ToggleSelectionByCell => render.toggle_selection_by_cell(),
                     MoveToStartOfLineContent => render.move_to_start_of_line_content(),
                     MoveToEndOfLineContent => render.move_to_end_of_line_content(),
                     MoveToStartOfLine => render.move_to_start_of_line(),
                     MoveToStartOfNextLine => render.move_to_start_of_next_line(),
+                    MoveToSelectionOtherEnd => render.move_to_selection_other_end(),
+                    MoveToSelectionOtherEndHoriz => render.move_to_selection_other_end_horiz(),
                     MoveBackwardWord => render.move_backward_one_word(),
                     MoveForwardWord => render.move_forward_one_word(),
                     MoveRight => render.move_right_single_cell(),
@@ -1160,12 +1188,30 @@ pub fn copy_key_table() -> KeyTable {
         (
             WKeyCode::Char(' '),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::ToggleSelectionByCell),
+            KeyAssignment::CopyMode(CopyModeAssignment::SetSelectionMode(Some(
+                SelectionMode::Cell,
+            ))),
         ),
         (
             WKeyCode::Char('v'),
             Modifiers::NONE,
-            KeyAssignment::CopyMode(CopyModeAssignment::ToggleSelectionByCell),
+            KeyAssignment::CopyMode(CopyModeAssignment::SetSelectionMode(Some(
+                SelectionMode::Cell,
+            ))),
+        ),
+        (
+            WKeyCode::Char('V'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::SetSelectionMode(Some(
+                SelectionMode::Line,
+            ))),
+        ),
+        (
+            WKeyCode::Char('V'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::SetSelectionMode(Some(
+                SelectionMode::Line,
+            ))),
         ),
         (
             WKeyCode::Char('v'),
@@ -1238,6 +1284,21 @@ pub fn copy_key_table() -> KeyTable {
             WKeyCode::Char('f'),
             Modifiers::CTRL,
             KeyAssignment::CopyMode(CopyModeAssignment::PageDown),
+        ),
+        (
+            WKeyCode::Char('o'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveToSelectionOtherEnd),
+        ),
+        (
+            WKeyCode::Char('O'),
+            Modifiers::NONE,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveToSelectionOtherEndHoriz),
+        ),
+        (
+            WKeyCode::Char('O'),
+            Modifiers::SHIFT,
+            KeyAssignment::CopyMode(CopyModeAssignment::MoveToSelectionOtherEndHoriz),
         ),
     ] {
         table.insert((key, mods), KeyTableEntry { action });

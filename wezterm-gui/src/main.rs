@@ -3,7 +3,7 @@
 
 use ::window::*;
 use anyhow::{anyhow, Context};
-use clap::Parser;
+use clap::{Parser, ValueHint};
 use config::{ConfigHandle, SshDomain, SshMultiplexing};
 use mux::activity::Activity;
 use mux::domain::{Domain, LocalDomain};
@@ -64,7 +64,8 @@ struct Opt {
     #[clap(
         long = "config-file",
         parse(from_os_str),
-        conflicts_with = "skip-config"
+        conflicts_with = "skip-config",
+        value_hint=ValueHint::FilePath,
     )]
     config_file: Option<OsString>,
 
@@ -105,6 +106,9 @@ enum SubCommand {
 
     #[clap(name = "ls-fonts", about = "Display information about fonts")]
     LsFonts(LsFontsCommand),
+
+    #[clap(name = "show-keys", about = "Show key assignments")]
+    ShowKeys(ShowKeysCommand),
 }
 
 async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
@@ -178,12 +182,13 @@ fn run_serial(config: config::ConfigHandle, opts: &SerialCommand) -> anyhow::Res
     let mux = setup_mux(domain.clone(), &config, Some("local"), None)?;
 
     let gui = crate::frontend::try_new()?;
+    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as u32;
     {
         let window_id = mux.new_empty_window(None);
         block_on(domain.attach(Some(*window_id)))?; // FIXME: blocking
 
         // FIXME: blocking
-        let _tab = block_on(domain.spawn(config.initial_size(), None, None, *window_id))?;
+        let _tab = block_on(domain.spawn(config.initial_size(dpi), None, None, *window_id))?;
     }
 
     maybe_show_configuration_error_window();
@@ -223,7 +228,8 @@ async fn async_run_with_domain_as_default(
     mux.add_domain(&domain);
     mux.set_default_domain(&domain);
 
-    spawn_tab_in_default_domain_if_mux_is_empty(cmd).await
+    let is_connecting = true;
+    spawn_tab_in_default_domain_if_mux_is_empty(cmd, is_connecting).await
 }
 
 async fn async_run_mux_client(opts: ConnectCommand) -> anyhow::Result<()> {
@@ -272,10 +278,23 @@ fn run_mux_client(opts: ConnectCommand) -> anyhow::Result<()> {
 
 async fn spawn_tab_in_default_domain_if_mux_is_empty(
     cmd: Option<CommandBuilder>,
+    is_connecting: bool,
 ) -> anyhow::Result<()> {
     let mux = Mux::get().unwrap();
 
     let domain = mux.default_domain();
+
+    if !is_connecting {
+        let have_panes_in_domain = mux
+            .iter_panes()
+            .iter()
+            .any(|p| p.domain_id() == domain.domain_id());
+
+        if have_panes_in_domain {
+            return Ok(());
+        }
+    }
+
     let window_id = mux.new_empty_window(None);
 
     domain.attach(Some(*window_id)).await?;
@@ -301,8 +320,9 @@ async fn spawn_tab_in_default_domain_if_mux_is_empty(
         true
     });
 
+    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as u32;
     let _tab = domain
-        .spawn(config.initial_size(), cmd, None, *window_id)
+        .spawn(config.initial_size(dpi), cmd, None, *window_id)
         .await?;
     Ok(())
 }
@@ -379,7 +399,25 @@ async fn async_run_terminal_gui(
     if !opts.no_auto_connect {
         connect_to_auto_connect_domains().await?;
     }
-    spawn_tab_in_default_domain_if_mux_is_empty(cmd).await
+
+    async fn trigger_gui_startup(lua: Option<Rc<mlua::Lua>>) -> anyhow::Result<()> {
+        if let Some(lua) = lua {
+            let args = lua.pack_multi(())?;
+            config::lua::emit_event(&lua, ("gui-startup".to_string(), args)).await?;
+        }
+        Ok(())
+    }
+
+    if let Err(err) =
+        config::with_lua_config_on_main_thread(move |lua| trigger_gui_startup(lua)).await
+    {
+        let message = format!("while processing gui-startup event: {:#}", err);
+        log::error!("{}", message);
+        persistent_toast_notification("Error", &message);
+    }
+
+    let is_connecting = false;
+    spawn_tab_in_default_domain_if_mux_is_empty(cmd, is_connecting).await
 }
 
 #[derive(Debug)]
@@ -462,7 +500,7 @@ impl Publish {
                                 window_id: None,
                                 command,
                                 command_dir: None,
-                                size: config.initial_size(),
+                                size: config.initial_size(0),
                                 workspace: workspace.unwrap_or(
                                     config
                                         .default_workspace
@@ -675,6 +713,12 @@ fn maybe_show_configuration_error_window() {
         let err = format!("{:#}", err);
         mux::connui::show_configuration_error_message(&err);
     }
+}
+
+fn run_show_keys(config: config::ConfigHandle, _cmd: &ShowKeysCommand) -> anyhow::Result<()> {
+    let map = crate::inputmap::InputMap::new(&config);
+    map.show_keys();
+    Ok(())
 }
 
 pub fn run_ls_fonts(config: config::ConfigHandle, cmd: &LsFontsCommand) -> anyhow::Result<()> {
@@ -970,5 +1014,6 @@ fn run() -> anyhow::Result<()> {
         SubCommand::Serial(serial) => run_serial(config, &serial),
         SubCommand::Connect(connect) => run_mux_client(connect),
         SubCommand::LsFonts(cmd) => run_ls_fonts(config, &cmd),
+        SubCommand::ShowKeys(cmd) => run_show_keys(config, &cmd),
     }
 }

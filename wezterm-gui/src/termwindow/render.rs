@@ -945,6 +945,7 @@ impl super::TermWindow {
                     scrollback_rows: 0,
                     scrollback_top: 0,
                     viewport_rows: 1,
+                    dpi: self.terminal_size.dpi,
                 },
                 config: &self.config,
                 cursor_border_color: LinearRgba::default(),
@@ -1022,6 +1023,16 @@ impl super::TermWindow {
         }
 
         Ok(())
+    }
+
+    pub fn min_scroll_bar_height(&self) -> f32 {
+        self.config
+            .min_scroll_bar_height
+            .evaluate_as_pixels(DimensionContext {
+                dpi: self.dimensions.dpi as f32,
+                pixel_max: self.terminal_size.pixel_height as f32,
+                pixel_cell: self.render_metrics.cell_size.height as f32,
+            })
     }
 
     pub fn paint_pane_opengl(
@@ -1271,14 +1282,7 @@ impl super::TermWindow {
         if pos.is_active && self.show_scroll_bar {
             let thumb_y_offset = top_bar_height as usize + border.top.get();
 
-            let min_height =
-                self.config
-                    .min_scroll_bar_height
-                    .evaluate_as_pixels(DimensionContext {
-                        dpi: self.dimensions.dpi as f32,
-                        pixel_max: self.terminal_size.pixel_height as f32,
-                        pixel_cell: self.render_metrics.cell_size.height as f32,
-                    });
+            let min_height = self.min_scroll_bar_height();
 
             let info = ScrollHit::thumb(
                 &*pos.pane,

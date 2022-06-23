@@ -4,7 +4,7 @@ use config::keyassignment::{
     MouseEventTrigger, SelectionMode,
 };
 use config::ConfigHandle;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use wezterm_term::input::MouseButton;
 use window::{KeyCode, Modifiers};
@@ -263,5 +263,95 @@ impl InputMap {
         self.mouse
             .get(&(event, mods.remove_positional_mods()))
             .cloned()
+    }
+
+    pub fn show_keys(&self) {
+        if let Some((key, mods, duration)) = &self.leader {
+            println!("Leader: {key:?} {mods:?} {duration:?}");
+        }
+
+        section_header("Default key table");
+        show_key_table(&self.keys.default);
+        println!();
+
+        let mut table_names = self.keys.by_name.keys().collect::<Vec<_>>();
+        table_names.sort();
+        for name in table_names {
+            if let Some(table) = self.keys.by_name.get(name) {
+                section_header(&format!("Key Table: {name}"));
+                show_key_table(table);
+                println!();
+            }
+        }
+
+        section_header("Mouse");
+        self.show_mouse();
+    }
+
+    fn show_mouse(&self) {
+        let ordered = self.mouse.iter().collect::<BTreeMap<_, _>>();
+
+        let mut trigger_width = 0;
+        let mut mod_width = 0;
+        for (trigger, mods) in ordered.keys() {
+            mod_width = mod_width.max(format!("{mods:?}").len());
+            trigger_width = trigger_width.max(format!("{trigger:?}").len());
+        }
+
+        for ((trigger, mods), action) in ordered {
+            let mods = if *mods == Modifiers::NONE {
+                String::new()
+            } else {
+                format!("{mods:?}")
+            };
+            let trigger = format!("{trigger:?}");
+            println!("\t{mods:mod_width$}   {trigger:trigger_width$}   ->   {action:?}");
+        }
+    }
+}
+
+fn section_header(title: &str) {
+    let dash = "-".repeat(title.len());
+    println!("{title}");
+    println!("{dash}");
+    println!();
+}
+
+fn human_key(key: &KeyCode) -> String {
+    match key {
+        KeyCode::Char('\x1b') => "Escape".to_string(),
+        KeyCode::Char('\x7f') => "Escape".to_string(),
+        KeyCode::Char('\x08') => "Backspace".to_string(),
+        KeyCode::Char('\r') => "Enter".to_string(),
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char('\t') => "Tab".to_string(),
+        KeyCode::Char(c) if c.is_ascii_control() => c.escape_debug().to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Function(n) => format!("F{n}"),
+        KeyCode::Numpad(n) => format!("Numpad{n}"),
+        KeyCode::Physical(phys) => format!("{} (Physical)", phys.to_string()),
+        _ => format!("{key:?}"),
+    }
+}
+
+fn show_key_table(table: &config::keyassignment::KeyTable) {
+    let ordered = table.iter().collect::<BTreeMap<_, _>>();
+
+    let mut key_width = 0;
+    let mut mod_width = 0;
+    for (key, mods) in ordered.keys() {
+        mod_width = mod_width.max(format!("{mods:?}").len());
+        key_width = key_width.max(human_key(key).len());
+    }
+
+    for ((key, mods), entry) in ordered {
+        let action = &entry.action;
+        let mods = if *mods == Modifiers::NONE {
+            String::new()
+        } else {
+            format!("{mods:?}")
+        };
+        let key = human_key(key);
+        println!("\t{mods:mod_width$}   {key:key_width$}   ->   {action:?}");
     }
 }

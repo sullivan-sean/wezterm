@@ -547,26 +547,6 @@ impl XWindowInner {
             log::trace!("Calling focus_change({focused})");
             self.events.dispatch(WindowEvent::FocusChanged(focused));
         }
-
-        // This is a bit gross; in <https://github.com/wez/wezterm/issues/2063>
-        // we observe that CONFIGURE_NOTIFY isn't being sent around certain
-        // WM operations when nvidia drivers are in used.
-        // However, focus events are in the right ballpark, but still happen
-        // before the new geometry is applied.
-        // This schedules an invalidation of both our sense of geometry and
-        // the window a short time after the focus event is processed in the
-        // hope that it can observe the changed window properties and update
-        // without the human needing to interact with the window.
-        let window_id = self.window_id;
-        promise::spawn::spawn(async move {
-            async_io::Timer::after(std::time::Duration::from_millis(100)).await;
-            XConnection::with_window_inner(window_id, |inner| {
-                inner.sure_about_geometry = false;
-                inner.invalidate();
-                Ok(())
-            });
-        })
-        .detach();
     }
 
     pub fn dispatch_ime_compose_status(&mut self, status: DeadKeyStatus) {
@@ -589,6 +569,7 @@ impl XWindowInner {
     /// If we own the selection, make sure that the X server reflects
     /// that and vice versa.
     fn update_selection_owner(&mut self, clipboard: Clipboard) -> anyhow::Result<()> {
+        let window_id = self.window_id;
         let conn = self.conn();
         let selection = match clipboard {
             Clipboard::PrimarySelection => xcb::x::ATOM_PRIMARY,
@@ -598,22 +579,36 @@ impl XWindowInner {
             .wait_for_reply(conn.send_request(&xcb::x::GetSelectionOwner { selection }))
             .unwrap()
             .owner();
-        if self.copy_and_paste.clipboard(clipboard).is_none() && current_owner == self.window_id {
+
+        let we_own_it = self.copy_and_paste.clipboard(clipboard).is_some();
+
+        if !we_own_it && current_owner == window_id {
+            log::trace!(
+                "SEL: window_id={window_id:?} X thinks we own selection, \
+                        but we don't: tell it to clear it"
+            );
             // We don't have a selection but X thinks we do; disown it!
             conn.send_request(&xcb::x::SetSelectionOwner {
                 owner: xcb::x::Window::none(),
                 selection,
                 time: self.copy_and_paste.time,
             });
-        } else if self.copy_and_paste.clipboard(clipboard).is_some()
-            && current_owner != self.window_id
-        {
+        } else if we_own_it && current_owner != window_id {
+            log::trace!(
+                "SEL: window_id={window_id:?} X doesn't think we own \
+                 selection ({current_owner:?} has it), but we do: tell it we have it"
+            );
             // We have the selection but X doesn't think we do; assert it!
             conn.send_request(&xcb::x::SetSelectionOwner {
                 owner: self.window_id,
                 selection,
                 time: self.copy_and_paste.time,
             });
+        } else {
+            log::trace!(
+                "SEL: window_id={window_id:?} current_owner={current_owner:?} \
+                owned={we_own_it}"
+            );
         }
         conn.flush().context("flushing after updating selection")?;
         Ok(())
@@ -630,6 +625,8 @@ impl XWindowInner {
     }
 
     fn selection_clear(&mut self, request: &xcb::x::SelectionClearEvent) -> anyhow::Result<()> {
+        let window_id = self.window_id;
+        log::debug!("SEL: window_id={window_id:?} {:?}", request);
         if let Some(clipboard) = self.selection_atom_to_clipboard(request.selection()) {
             self.copy_and_paste.clipboard_mut(clipboard).take();
             self.copy_and_paste.request_mut(clipboard).take();
@@ -643,15 +640,8 @@ impl XWindowInner {
     /// and when another client wants to copy it.
     fn selection_request(&mut self, request: &xcb::x::SelectionRequestEvent) -> anyhow::Result<()> {
         let conn = self.conn();
-        log::trace!(
-            "SEL: time={} owner={:?} requestor={:?} selection={:?} target={:?} property={:?}",
-            request.time(),
-            request.owner(),
-            request.requestor(),
-            request.selection(),
-            request.target(),
-            request.property()
-        );
+        let window_id = self.window_id;
+        log::trace!("SEL: window_id={window_id:?} {:?}", request);
         log::trace!(
             "XSEL={:?}, UTF8={:?} PRIMARY={:?} clip={:?}",
             conn.atom_xsel_data,
@@ -663,6 +653,7 @@ impl XWindowInner {
         let selprop = if request.target() == conn.atom_targets {
             // They want to know which targets we support
             let atoms: [Atom; 1] = [conn.atom_utf8_string];
+            log::trace!("SEL: window_id={window_id:?} requestor wants supported targets");
             conn.send_request(&xcb::x::ChangeProperty {
                 mode: PropMode::Replace,
                 window: request.requestor(),
@@ -676,6 +667,7 @@ impl XWindowInner {
         } else if request.target() == conn.atom_utf8_string
             || request.target() == xcb::x::ATOM_STRING
         {
+            log::trace!("SEL: window_id={window_id:?} requestor wants string data");
             if let Some(clipboard) = self.selection_atom_to_clipboard(request.selection()) {
                 // We'll accept requests for UTF-8 or STRING data.
                 // We don't and won't do any conversion from UTF-8 to
@@ -703,7 +695,10 @@ impl XWindowInner {
             // we can report back to them.
             xcb::x::ATOM_NONE
         };
-        log::trace!("responding with selprop={:?}", selprop);
+        log::trace!(
+            "SEL: window_id={window_id:?} responding with selprop={:?}",
+            selprop
+        );
 
         conn.send_request(&xcb::x::SendEvent {
             propagate: true,
@@ -723,28 +718,31 @@ impl XWindowInner {
 
     fn selection_notify(&mut self, selection: &xcb::x::SelectionNotifyEvent) -> anyhow::Result<()> {
         let conn = self.conn();
+        let window_id = self.window_id;
+        let selection_name = conn.atom_name(selection.selection());
+        let target_name = conn.atom_name(selection.target());
 
         log::trace!(
-            "SELECTION_NOTIFY received selection={:?} (prim={:?} clip={:?}) target={:?} property={:?} utf8={:?}",
-            selection.selection(),
-            xcb::x::ATOM_PRIMARY,
-            conn.atom_clipboard,
-            selection.target(),
-            selection.property(),
-            self.conn().atom_utf8_string,
+            "SEL: window_id={window_id:?} SELECTION_NOTIFY received {selection:?} \
+            selection.selection={selection_name} selection.target={target_name}"
         );
 
         if let Some(clipboard) = self.selection_atom_to_clipboard(selection.selection()) {
             if selection.property() != xcb::x::ATOM_NONE
                 // Restrict to strictly UTF-8 to avoid crashing; see
                 // <https://github.com/meh/rust-xcb-util/issues/21>
-                && selection.target() == self.conn().atom_utf8_string
+                && selection.target() == conn.atom_utf8_string
             {
+                log::trace!(
+                    "SEL: window_id={window_id:?} requesting selection from window {:?}",
+                    selection.requestor()
+                );
+
                 match conn.wait_for_reply(conn.send_request(&xcb::x::GetProperty {
                     delete: false,
                     window: selection.requestor(),
                     property: selection.property(),
-                    r#type: self.conn().atom_utf8_string,
+                    r#type: conn.atom_utf8_string,
                     long_offset: 0,
                     long_length: u32::max_value(),
                 })) {
@@ -763,8 +761,13 @@ impl XWindowInner {
                     }
                 }
             } else if let Some(mut promise) = self.copy_and_paste.request_mut(clipboard).take() {
+                log::trace!(
+                    "SEL: window_id={window_id:?} weird state, fulfil promise with empty string"
+                );
                 promise.ok("".to_owned());
             }
+        } else {
+            log::trace!("SEL: window_id={window_id:?} unknown selection {selection_name}");
         }
         Ok(())
     }
@@ -1064,6 +1067,11 @@ impl XWindow {
         conn.windows.borrow_mut().insert(window_id, window);
 
         window_handle.set_title(name);
+        // Before we map the window, flush to ensure that all of the other properties
+        // have been applied to it.
+        // This is a speculative fix for this race condition issue:
+        // <https://github.com/wez/wezterm/issues/2155>
+        conn.flush().context("flushing before mapping window")?;
         window_handle.show();
 
         // Some window managers will ignore the x,y that we set during window
@@ -1421,33 +1429,39 @@ impl WindowOps for XWindow {
 
     /// Initiate textual transfer from the clipboard
     fn get_clipboard(&self, clipboard: Clipboard) -> Future<String> {
+        let window_id = self.0;
+        log::trace!("SEL: window_id={window_id:?} Window::get_clipboard {clipboard:?} called");
         let mut promise = Promise::new();
         let future = promise.get_future().unwrap();
         let mut promise = Some(promise);
-        XConnection::with_window_inner(self.0, move |inner| {
-            let mut promise = promise.take().unwrap();
-            if let Some(text) = inner.copy_and_paste.clipboard(clipboard) {
-                promise.ok(text.to_owned());
 
-                // Cancel any outstanding promise from the other branch
-                // below.
-                inner.copy_and_paste.request_mut(clipboard).take();
-            } else {
-                log::debug!("prepare promise, time={}", inner.copy_and_paste.time);
-                inner.copy_and_paste.request_mut(clipboard).replace(promise);
-                let conn = inner.conn();
-                // Find the owner and ask them to send us the buffer
-                conn.send_request(&xcb::x::ConvertSelection {
-                    requestor: inner.window_id,
-                    selection: match clipboard {
-                        Clipboard::Clipboard => conn.atom_clipboard,
-                        Clipboard::PrimarySelection => xcb::x::ATOM_PRIMARY,
-                    },
-                    target: conn.atom_utf8_string,
-                    property: conn.atom_xsel_data,
-                    time: inner.copy_and_paste.time,
-                });
-            }
+        XConnection::with_window_inner(window_id, move |inner| {
+            // In theory, we could simply consult inner.copy_and_paste to see
+            // if we think we own the clipboard, but there are some situations
+            // where the selection owner moves between two wezterm windows
+            // where we don't receive a SELECTION_NOTIFY in time to correctly
+            // invalidate that state, so we always ask the X server to for
+            // the selection, even if it is a little slower.
+            // <https://github.com/wez/wezterm/issues/2110>
+            let promise = promise.take().unwrap();
+            log::debug!(
+                "SEL: window_id={window_id:?} Window::get_clipboard: \
+                        {clipboard:?}, prepare promise, time={}",
+                inner.copy_and_paste.time
+            );
+            inner.copy_and_paste.request_mut(clipboard).replace(promise);
+            let conn = inner.conn();
+            // Find the owner and ask them to send us the buffer
+            conn.send_request(&xcb::x::ConvertSelection {
+                requestor: inner.window_id,
+                selection: match clipboard {
+                    Clipboard::Clipboard => conn.atom_clipboard,
+                    Clipboard::PrimarySelection => xcb::x::ATOM_PRIMARY,
+                },
+                target: conn.atom_utf8_string,
+                property: conn.atom_xsel_data,
+                time: inner.copy_and_paste.time,
+            });
             Ok(())
         });
 
@@ -1456,7 +1470,12 @@ impl WindowOps for XWindow {
 
     /// Set some text in the clipboard
     fn set_clipboard(&self, clipboard: Clipboard, text: String) {
-        XConnection::with_window_inner(self.0, move |inner| {
+        let window_id = self.0;
+        XConnection::with_window_inner(window_id, move |inner| {
+            log::trace!(
+                "SEL: window_id={window_id:?} now owns selection \
+                for {clipboard:?} {text:?}"
+            );
             inner
                 .copy_and_paste
                 .clipboard_mut(clipboard)

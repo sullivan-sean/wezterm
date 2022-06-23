@@ -24,6 +24,7 @@ use termwiz::render::terminfo::TerminfoRenderer;
 use termwiz::surface::Change;
 use termwiz::terminal::{ScreenSize, Terminal, TerminalWaker};
 use wezterm_ssh::{ConfigMap, Session, SessionEvent, SshChildProcess, SshPty};
+use wezterm_term::TerminalSize;
 
 #[derive(Default)]
 struct PasswordPromptHost {
@@ -225,27 +226,45 @@ impl RemoteSshDomain {
             cmd: &CommandBuilder,
             env: &HashMap<String, String>,
         ) -> anyhow::Result<String> {
-            let mut env_cmd = vec!["env".to_string()];
-            if let Some(dir) = dir {
-                env_cmd.push("-C".to_string());
-                env_cmd.push(dir.clone());
+            // "Soft" chdir: if it doesn't exist then it doesn't matter
+            let cd_cmd = if let Some(dir) = dir {
+                format!("cd {};", shell_words::quote(&dir))
             } else if let Some(dir) = cmd.get_cwd() {
                 let dir = dir.to_str().context("converting cwd to string")?;
-                env_cmd.push("-C".to_string());
-                env_cmd.push(dir.to_string());
-            }
+                format!("cd {};", shell_words::quote(&dir))
+            } else {
+                String::new()
+            };
+
+            let mut env_cmd = vec!["env".to_string()];
 
             for (k, v) in env {
                 env_cmd.push(format!("{}={}", k, v));
             }
 
             let cmd = if cmd.is_default_prog() {
-                "$SHELL".to_string()
+                // We'd like to spawn a login shell, but since we are invoking env
+                // we end up in a regular shell.
+                // This guff tries to find a reasonably portable way to execute
+                // the shell as a login shell.
+                // Per: <https://unix.stackexchange.com/a/666850/123914>
+                // the most portable way is to use perl, but in case perl is not
+                // installed, zsh, bash and ksh all support `exec -a`.
+                // Other shells may support `exec -a` but there isn't a simple
+                // way to test for them, so we assume that if we have one of those
+                // three that we can use it, otherwise we fall back to just running
+                // the shell directly.
+                let login_shell = "command -v perl > /dev/null && \
+                  exec perl -e 'use File::Basename; $shell = basename($ENV{SHELL}); exec {$ENV{SHELL}} \"-$shell\"'; \
+                  case \"$SHELL\" in */zsh|*/bash|*/ksh ) exec -a \"-$(basename $SHELL)\" $SHELL ;; esac ; \
+                  exec $SHELL";
+
+                format!("$SHELL -c {}", shell_words::quote(login_shell))
             } else {
                 cmd.as_unix_command_line()?
             };
 
-            Ok(shell_words::join(env_cmd) + " " + &cmd)
+            Ok(cd_cmd + &shell_words::join(env_cmd) + " " + &cmd)
         }
 
         let command_line = match (cmd.is_default_prog(), self.dom.assume_shell, command_dir) {
@@ -268,12 +287,12 @@ fn connect_ssh_session(
     stdout_tx: Sender<BoxedReader>,
     child_tx: Sender<SshChildProcess>,
     pty_tx: Sender<SshPty>,
-    size: Arc<Mutex<PtySize>>,
+    size: Arc<Mutex<TerminalSize>>,
     command_line: Option<String>,
     env: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     struct StdoutShim<'a> {
-        size: Arc<Mutex<PtySize>>,
+        size: Arc<Mutex<TerminalSize>>,
         stdout: &'a mut BufWriter<FileDescriptor>,
     }
 
@@ -297,7 +316,7 @@ fn connect_ssh_session(
     struct TerminalShim<'a> {
         stdout: &'a mut StdoutShim<'a>,
         stdin: &'a mut FileDescriptor,
-        size: Arc<Mutex<PtySize>>,
+        size: Arc<Mutex<TerminalSize>>,
         renderer: TerminfoRenderer,
         parser: InputParser,
         input_queue: VecDeque<InputEvent>,
@@ -488,7 +507,7 @@ fn connect_ssh_session(
                 // set up the real pty for the pane
                 match smol::block_on(session.request_pty(
                     &config::configuration().term,
-                    *size.lock().unwrap(),
+                    crate::terminal_size_to_pty_size(*size.lock().unwrap())?,
                     command_line.as_ref().map(|s| s.as_str()),
                     Some(env),
                 )) {
@@ -538,7 +557,7 @@ fn connect_ssh_session(
 impl Domain for RemoteSshDomain {
     async fn spawn_pane(
         &self,
-        size: PtySize,
+        size: TerminalSize,
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
     ) -> anyhow::Result<Rc<dyn Pane>> {
@@ -556,7 +575,7 @@ impl Domain for RemoteSshDomain {
             let (concrete_pty, concrete_child) = session
                 .request_pty(
                     &config::configuration().term,
-                    size,
+                    crate::terminal_size_to_pty_size(size)?,
                     command_line.as_ref().map(|s| s.as_str()),
                     Some(env),
                 )
@@ -649,7 +668,7 @@ impl Domain for RemoteSshDomain {
         // session without duplicating a lot of logic over here.
 
         let terminal = wezterm_term::Terminal::new(
-            crate::pty_size_to_terminal_size(size),
+            size,
             std::sync::Arc::new(config::TermConfig::new()),
             "WezTerm",
             config::wezterm_version(),
@@ -868,7 +887,7 @@ enum WrappedSshPtyInner {
     Connecting {
         reader: Option<PtyReader>,
         connected: Receiver<SshPty>,
-        size: Arc<Mutex<PtySize>>,
+        size: Arc<Mutex<TerminalSize>>,
     },
     Connected {
         reader: Option<PtyReader>,
@@ -914,7 +933,7 @@ impl WrappedSshPtyInner {
                 ..
             } => {
                 if let Ok(pty) = connected.try_recv() {
-                    let res = pty.resize(*size.lock().unwrap());
+                    let res = pty.resize(crate::terminal_size_to_pty_size(*size.lock().unwrap())?);
                     *self = Self::Connected {
                         pty,
                         reader: reader.take(),
@@ -934,7 +953,13 @@ impl portable_pty::MasterPty for WrappedSshPty {
         let mut inner = self.inner.borrow_mut();
         match &mut *inner {
             WrappedSshPtyInner::Connecting { ref mut size, .. } => {
-                *size.lock().unwrap() = new_size;
+                {
+                    let mut size = size.lock().unwrap();
+                    size.cols = new_size.cols as usize;
+                    size.rows = new_size.rows as usize;
+                    size.pixel_height = new_size.pixel_height as usize;
+                    size.pixel_width = new_size.pixel_width as usize;
+                }
                 inner.check_connected()
             }
             WrappedSshPtyInner::Connected { pty, .. } => pty.resize(new_size),
@@ -945,7 +970,7 @@ impl portable_pty::MasterPty for WrappedSshPty {
         let mut inner = self.inner.borrow_mut();
         match &*inner {
             WrappedSshPtyInner::Connecting { size, .. } => {
-                let size = *size.lock().unwrap();
+                let size = crate::terminal_size_to_pty_size(*size.lock().unwrap())?;
                 inner.check_connected()?;
                 Ok(size)
             }

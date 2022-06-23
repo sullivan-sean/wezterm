@@ -163,9 +163,11 @@ fn register_lua_modules() {
         battery::register,
         termwiz_funcs::register,
         logging::register,
+        mux_lua::register,
         filesystem::register,
         ssh_funcs::register,
         spawn_funcs::register,
+        share_data::register,
     ] {
         config::lua::add_context_setup_func(func);
     }

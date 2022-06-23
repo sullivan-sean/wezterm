@@ -27,7 +27,7 @@ use crate::{
 use anyhow::Context;
 use luahelper::impl_lua_conversion_dynamic;
 use mlua::FromLua;
-use portable_pty::{CommandBuilder, PtySize};
+use portable_pty::CommandBuilder;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Read;
@@ -39,6 +39,7 @@ use termwiz::surface::CursorShape;
 use wezterm_bidi::ParagraphDirectionHint;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_input_types::{Modifiers, WindowDecorations};
+use wezterm_term::TerminalSize;
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct Config {
@@ -159,6 +160,8 @@ pub struct Config {
 
     #[dynamic(default = "default_true")]
     pub enable_kitty_graphics: bool,
+    #[dynamic(default)]
+    pub enable_kitty_keyboard: bool,
 
     /// Specifies the width of a new window, expressed in character cells
     #[dynamic(default = "default_initial_cols")]
@@ -1054,10 +1057,10 @@ impl Config {
         }
     }
 
-    pub fn initial_size(&self) -> PtySize {
-        PtySize {
-            rows: self.initial_rows,
-            cols: self.initial_cols,
+    pub fn initial_size(&self, dpi: u32) -> TerminalSize {
+        TerminalSize {
+            rows: self.initial_rows as usize,
+            cols: self.initial_cols as usize,
             // Guess at a plausible default set of pixel dimensions.
             // This is based on "typical" 10 point font at "normal"
             // pixel density.
@@ -1067,8 +1070,9 @@ impl Config {
             // the GUI has had a chance to update the pixel dimensions
             // when running under X11.
             // This is a bit gross.
-            pixel_width: 8 * self.initial_cols,
-            pixel_height: 16 * self.initial_rows,
+            pixel_width: 8 * self.initial_cols as usize,
+            pixel_height: 16 * self.initial_rows as usize,
+            dpi,
         }
     }
 
@@ -1209,7 +1213,7 @@ fn default_initial_cols() -> u16 {
 fn default_hyperlink_rules() -> Vec<hyperlink::Rule> {
     vec![
         // URL with a protocol
-        hyperlink::Rule::new(r"\b\w+://(?:[\w.-]+)\.[a-z]{2,15}\S*\b", "$0").unwrap(),
+        hyperlink::Rule::new(r"\b\w+://[\w.-]+\.[a-z]{2,15}\S*\b", "$0").unwrap(),
         // implicit mailto link
         hyperlink::Rule::new(r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0").unwrap(),
         // file://

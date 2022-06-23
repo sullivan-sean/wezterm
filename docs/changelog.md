@@ -13,6 +13,9 @@ As features stabilize some brief notes about them will accumulate here.
 
 #### New
 * [background](config/lua/config/background.md) option for rich background compositing and parallax scrolling effects.
+* Added [docs for the cli](cli/general.md)
+* Support for the [Kitty Keyboard Protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol). Use [enable_kitty_keyboard](config/lua/config/enable_kitty_keyboard.md)`=true` to enable it.
+* New [wezterm.mux](config/lua/wezterm.mux/index.md) module, [gui-startup](config/lua/gui-events/gui-startup.md) and [mux-startup](config/lua/mux-events/mux-startup.md) events for spawning programs into your preferred arrangement when wezterm starts. [#674](https://github.com/wez/wezterm/issues/674)
 * ssh client now supports `BindAddress`. Thanks to [@gpanders](https://github.com/gpanders)! [#1875](https://github.com/wez/wezterm/pull/1875)
 * [PaneInformation.domain_name](config/lua/PaneInformation.md) and [pane:get_domain_name()](config/lua/pane/get_domain_name.md) which return the name of the domain with which a pane is associated. [#1881](https://github.com/wez/wezterm/issues/1881)
 * You may now use `CTRL-n` and `CTRL-p` (in addition to the up/down arrow and vi motion keys) to change the selected row in the Launcher.  Thanks to [@Junnplus](https://github.com/Junnplus)! [#1880](https://github.com/wez/wezterm/pull/1880)
@@ -24,10 +27,12 @@ As features stabilize some brief notes about them will accumulate here.
 * [clean_exit_codes](config/lua/config/clean_exit_codes.md) config to fine tune [exit_behavior](config/lua/config/exit_behavior.md) [#1889](https://github.com/wez/wezterm/issues/1889)
 * [ClearSelection](config/lua/keyassignment/ClearSelection.md) key assignment [#1900](https://github.com/wez/wezterm/issues/1900)
 * `wezterm cli list --format json` and `wezterm cli list-clients --format json` allow retrieving data in json format. Thanks to [@ratmice](https://github.com/ratmice)! [#1911](https://github.com/wez/wezterm/pull/1911)
-* macOS, Windows: you may now drag and drop files from other programs and have their paths paste into the terminal. The new [quote_dropped_files](config/lua/config/quote_dropped_files.md) option controls how the file names are quoted. Thanks to [@junnplus](https://github.com/junnplus) and [@datasone](https://github.com/datasone)! [#1868](https://github.com/wez/wezterm/pull/1868) [#1953](https://github.com/wez/wezterm/pull/1953)
+* macOS, Windows: you may now drag and drop files from other programs and have their paths paste into the terminal. The new [quote_dropped_files](config/lua/config/quote_dropped_files.md) option controls how the file names are quoted. Thanks to [@junnplus](https://github.com/junnplus), [@datasone](https://github.com/datasone) and [@Funami580](https://github.com/Funami580)! [#1868](https://github.com/wez/wezterm/pull/1868) [#1953](https://github.com/wez/wezterm/pull/1953) [#2148](https://github.com/wez/wezterm/pull/2148)
 * The mouse scroll wheel now cycles between tabs when hovering over the tab. Thanks to [@junnplus](https://github.com/junnplus)! [#1726](https://github.com/wez/wezterm/issues/1726)
 * Holding down `ALT` while dragging the left button will select a rectangular block. It is also possible to use `ALT+SHIFT` to select a rectangular block. [ExtendSelectionToMouseCursor](config/lua/keyassignment/ExtendSelectionToMouseCursor.md) and [SelectTextAtMouseCursor](config/lua/keyassignment/SelectTextAtMouseCursor.md) now accept `"Block"` as a selection mode. Thanks to [@Funami580](https://github.com/Funami580) for helping! [#1361](https://github.com/wez/wezterm/issues/1361)
 * In Copy Mode, `CTRL-v` will enable rectangular block selection mode. [#1656](https://github.com/wez/wezterm/issues/1656)
+* In Copy Mode, `SHIFT-v` will enable line selection mode. Thanks to [@bew](https://github.com/bew)! [#2086](https://github.com/wez/wezterm/pull/2086)
+* In Copy Mode, `o` and `O` can be used to move the cursor to the other end of the selection, as in vim. Thanks to [@bew](https://github.com/bew)! [#2150](https://github.com/wez/wezterm/pull/2150)
 * Copy Mode: key assignments are [now configurable](copymode.md#configurable-key-assignments) [#993](https://github.com/wez/wezterm/issues/993)
 * Search Mode: key assignments are [now configurable](scrollback.md#configurable-key-assignments) [#993](https://github.com/wez/wezterm/issues/993)
 * Search Mode: the default `CTRL-SHIFT-F` key assignment now defaults to the new `CurrentSelectionOrEmptyString` mode to search for the current selection text, if any.  See [Search](config/lua/keyassignment/Search.md) for more info.
@@ -43,7 +48,9 @@ As features stabilize some brief notes about them will accumulate here.
 * [PaneSelect](config/lua/keyassignment/PaneSelect.md) key assignment to activate the pane selection UI to activate or swap the selected pane. [#1842](https://github.com/wez/wezterm/issues/1842) [#1975](https://github.com/wez/wezterm/issues/1975)
 * [window_background_gradient](config/lua/config/window_background_gradient.md) now also supports `Linear` gradients with an angle of your choice. Thanks to [@erf](https://github.com/erf)! [#2038](https://github.com/wez/wezterm/pull/2038)
 * RPM and DEB packages now install zsh and bash `wezterm` CLI completions
-* `Grey-green`, `Neon` and `Oceanic-Next` color schemes
+* Color schemes: [arcoiris](colorschemes/a/index.md#arcoiris), [duckbones](colorschemes/d/index.md#duckbones), [Grey-green](colorschemes/g/index.md#grey-green), [kanagawabones](colorschemes/k/index.md#kanagawabones), [Neon](colorschemes/n/index.md#neon), [neobones_dark](colorschemes/n/index.md#neobones_dark), [neobones_light](colorschemes/n/index.md#neobones_light), [seoulbones_dark](colorschemes/s/index.md#seoulbones_dark), [seoulbones_light](colorschemes/s/index.md#seoulbones_light), [tokyonight-day](colorschemes/t/index.md#tokyonight-day), [tokyonight-storm](colorschemes/t/index.md#tokyonight-storm), [tokyonight](colorschemes/t/index.md#tokyonight), [vimbones](colorschemes/v/index.md#vimbones), [zenbones](colorschemes/z/index.md#zenbones), [zenbones_dark](colorschemes/z/index.md#zenbones_dark), [zenbones_light](colorschemes/z/index.md#zenbones_light), [zenburned](colorschemes/z/index.md#zenburned), [zenwritten_dark](colorschemes/z/index.md#zenwritten_dark), [zenwritten_light](colorschemes/z/index.md#zenwritten_light)
+* [wezterm.GLOBAL](config/lua/wezterm/GLOBAL.md) for persisting lua data across config reloads
+* `wezterm show-keys` command to show key and mouse binding assignments [#2134](https://github.com/wez/wezterm/issues/2134)
 
 #### Updated
 * Bundled harfbuzz to 4.3.0
@@ -56,7 +63,7 @@ As features stabilize some brief notes about them will accumulate here.
 * Quickselect no longer jumps to the bottom of the viewport when activated, allowing you to quickselect within the current viewport region
 * Quickselect now supports multi-line anchors such as `^` and `$`.  [#2008](https://github.com/wez/wezterm/issues/2008)
 * Overriding config using the cli `--config` option will now error out and prevent starting up if unknown config options are specified, or if the value evaluates to `nil`. Unknown options continue to generate warnings (rather than errors) when observed in the config file so that you're not "locked out" of wezterm if you make a typo in the config file.
-* Windows: `allow_win32_input_mode` now defaults to `true` and enables using [win32-input-mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md) to send high-fidelity keyboard input to ConPTY. This means that win32 console applications, such as [FAR Manager](https://github.com/FarGroup/FarManager) that use the low level `INPUT_RECORD` API will now receive key-up events as well as events for modifier-only key presses. [#1509](https://github.com/wez/wezterm/issues/1509) [#2009](https://github.com/wez/wezterm/issues/2009) [#2098](https://github.com/wez/wezterm/issues/2098) [#1904](https://github.com/wez/wezterm/issues/1904)
+* Windows: [allow_win32_input_mode](config/lua/config/allow_win32_input_mode.md) now defaults to `true` and enables using [win32-input-mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md) to send high-fidelity keyboard input to ConPTY. This means that win32 console applications, such as [FAR Manager](https://github.com/FarGroup/FarManager) that use the low level `INPUT_RECORD` API will now receive key-up events as well as events for modifier-only key presses. [#1509](https://github.com/wez/wezterm/issues/1509) [#2009](https://github.com/wez/wezterm/issues/2009) [#2098](https://github.com/wez/wezterm/issues/2098) [#1904](https://github.com/wez/wezterm/issues/1904)
 * Wayland: [enable_wayland](config/lua/config/enable_wayland.md) now defaults to `true`. [#2104](https://github.com/wez/wezterm/issues/2104)
 * [exit_behavior](config/lua/config/exit_behavior.md) now defaults to `"Close"`. [#2105](https://github.com/wez/wezterm/issues/2105)
 
@@ -82,6 +89,13 @@ As features stabilize some brief notes about them will accumulate here.
 * Avoid fragmenting XTVERSION, DA2, DA3 query responses [#2060](https://github.com/wez/wezterm/issues/2060)
 * Synthesized bold didn't kick in for automatically computed `font_rules`. [#2074](https://github.com/wez/wezterm/issues/2074)
 * Added [freetype_pcf_long_family_names](config/lua/config/freetype_pcf_long_family_names.md) option to workaround PCF font naming issues on certain Linux distributions. [#2100](https://github.com/wez/wezterm/issues/2100)
+* X11/Wayland: wezterm.desktop now specifies `StartupWMClass`. Thanks to [@uncomfyhalomacro](https://github.com/uncomfyhalomacro)! [#2052](https://github.com/wez/wezterm/issues/2052) [#2125](https://github.com/wez/wezterm/pull/2125)
+* `sudo -i` in a pane would cause subsequent pane/tab creation to fail until the cwd was changed to an accessible directory [#2120](https://github.com/wez/wezterm/issues/2120)
+* X11: Fixed an issue where some events could get lost around resize events, especially prevalent when using the NVIDIA proprietary drivers. Thanks to [@pjones123](https://github.com/pjones123) and [@yuttie](https://githug.com/yuttie) for working through this! [#1992](https://github.com/wez/wezterm/issues/1992) [#2063](https://github.com/wez/wezterm/issues/2063) [#2111](https://github.com/wez/wezterm/pull/2111) [#1628](https://github.com/wez/wezterm/issues/1628)
+* macOS: `SHIFT-Tab` and `CTRL-SHIFT-Tab` produced incorrect results [#1902](https://github.com/wez/wezterm/issues/1902)
+* X11: Fixed an issue where copy and paste between two wezterm windows could produce stale results. [#2110](https://github.com/wez/wezterm/issues/2110)
+* Mouse selection spanning multiple lines always included the first column even when the mouse was to the left of the first column. Thanks to [@Funami580](https://github.com/Funami580)! [#2106](https://github.com/wez/wezterm/pull/2106)
+* Fonts: Codepoints for eg: symbol glyphs that were not explicitly listed in your font fallback list may not be resolved when used in styled (eg: bold) text. [#1913](https://github.com/wez/wezterm/issues/1913) [#2158](https://github.com/wez/wezterm/issues/2158)
 
 ### 20220408-101518-b908e2dd
 

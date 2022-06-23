@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
-use clap::Parser;
+use clap::{Parser, ValueHint};
 use clap_complete::{generate as generate_completion, Shell};
 use config::keyassignment::SpawnTabDomain;
 use config::wezterm_version;
@@ -18,6 +18,7 @@ use tabout::{tabulate_output, Alignment, Column};
 use umask::UmaskSaver;
 use wezterm_client::client::{unix_connect_with_retry, Client};
 use wezterm_gui_subcommands::*;
+use wezterm_term::TerminalSize;
 
 mod asciicast;
 
@@ -38,7 +39,8 @@ struct Opt {
     #[clap(
         long = "config-file",
         parse(from_os_str),
-        conflicts_with = "skip-config"
+        conflicts_with = "skip-config",
+        value_hint=ValueHint::FilePath
     )]
     config_file: Option<OsString>,
 
@@ -73,6 +75,9 @@ enum SubCommand {
 
     #[clap(name = "ls-fonts", about = "Display information about fonts")]
     LsFonts(LsFontsCommand),
+
+    #[clap(name = "show-keys", about = "Show key assignments")]
+    ShowKeys(ShowKeysCommand),
 
     #[clap(name = "cli", about = "Interact with experimental mux server")]
     Cli(CliCommand),
@@ -199,6 +204,7 @@ enum CliSubCommand {
     #[clap(
         name = "split-pane",
         rename_all = "kebab",
+        trailing_var_arg = true,
         about = "split the current pane.
 Outputs the pane-id for the newly created pane on success"
     )]
@@ -247,7 +253,7 @@ Outputs the pane-id for the newly created pane on success"
 
         /// Specify the current working directory for the initially
         /// spawned program
-        #[clap(long, parse(from_os_str))]
+        #[clap(long, parse(from_os_str), value_hint=ValueHint::DirPath)]
         cwd: Option<OsString>,
 
         /// Instead of spawning a new command, move the specified
@@ -258,12 +264,13 @@ Outputs the pane-id for the newly created pane on success"
         /// Instead of executing your shell, run PROG.
         /// For example: `wezterm cli split-pane -- bash -l` will spawn bash
         /// as if it were a login shell.
-        #[clap(parse(from_os_str))]
+        #[clap(parse(from_os_str), value_hint=ValueHint::CommandWithArguments, multiple_values=true)]
         prog: Vec<OsString>,
     },
 
     #[clap(
         name = "spawn",
+        trailing_var_arg = true,
         about = "Spawn a command into a new window or tab
 Outputs the pane-id for the newly created pane on success"
     )]
@@ -291,7 +298,7 @@ Outputs the pane-id for the newly created pane on success"
 
         /// Specify the current working directory for the initially
         /// spawned program
-        #[clap(long = "cwd", parse(from_os_str))]
+        #[clap(long = "cwd", parse(from_os_str), value_hint=ValueHint::DirPath)]
         cwd: Option<OsString>,
 
         /// When creating a new window, override the default workspace name
@@ -302,7 +309,7 @@ Outputs the pane-id for the newly created pane on success"
         /// Instead of executing your shell, run PROG.
         /// For example: `wezterm cli spawn -- bash -l` will spawn bash
         /// as if it were a login shell.
-        #[clap(parse(from_os_str))]
+        #[clap(parse(from_os_str), value_hint=ValueHint::CommandWithArguments, multiple_values=true)]
         prog: Vec<OsString>,
     },
 
@@ -350,7 +357,7 @@ struct ImgCatCommand {
     no_preserve_aspect_ratio: bool,
     /// The name of the image file to be displayed.
     /// If omitted, will attempt to read it from stdin.
-    #[clap(parse(from_os_str))]
+    #[clap(parse(from_os_str), value_hint=ValueHint::FilePath)]
     file_name: Option<OsString>,
 }
 
@@ -388,12 +395,12 @@ impl ImgCatCommand {
 struct SetCwdCommand {
     /// The directory to specify.
     /// If omitted, will use the current directory of the process itself.
-    #[clap(parse(from_os_str))]
+    #[clap(parse(from_os_str), value_hint=ValueHint::DirPath)]
     cwd: Option<OsString>,
 
     /// The hostname to use in the constructed file:// URL.
     /// If omitted, the system hostname will be used.
-    #[clap(parse(from_os_str))]
+    #[clap(parse(from_os_str), value_hint=ValueHint::Hostname)]
     host: Option<OsString>,
 }
 
@@ -470,6 +477,7 @@ fn run() -> anyhow::Result<()> {
     {
         SubCommand::Start(_)
         | SubCommand::LsFonts(_)
+        | SubCommand::ShowKeys(_)
         | SubCommand::Ssh(_)
         | SubCommand::Serial(_)
         | SubCommand::Connect(_) => delegate_to_gui(saver),
@@ -563,8 +571,8 @@ async fn resolve_pane_id(client: &Client, pane_id: Option<PaneId>) -> anyhow::Re
 
 #[derive(serde::Serialize)]
 struct CliListResultPtySize {
-    rows: u16,
-    cols: u16,
+    rows: usize,
+    cols: usize,
 }
 // This will be serialized to JSON via the 'List' command.
 // As such it is intended to be a stable output format,
@@ -590,7 +598,7 @@ impl From<mux::tab::PaneEntry> for CliListResultItem {
             workspace,
             title,
             working_dir,
-            size: portable_pty::PtySize { rows, cols, .. },
+            size: TerminalSize { rows, cols, .. },
             ..
         } = pane;
 
@@ -1000,6 +1008,8 @@ async fn run_cli_async(config: config::ConfigHandle, cli: CliCommand) -> anyhow:
 
             let workspace = workspace.unwrap_or_else(|| mux::DEFAULT_WORKSPACE.to_string());
 
+            let size = config.initial_size(0);
+
             let spawned = client
                 .spawn_v2(codec::SpawnV2 {
                     domain: domain_name.map_or(SpawnTabDomain::DefaultDomain, |name| {
@@ -1013,7 +1023,7 @@ async fn run_cli_async(config: config::ConfigHandle, cli: CliCommand) -> anyhow:
                         Some(builder)
                     },
                     command_dir: canon_cwd(cwd)?,
-                    size: config::configuration().initial_size(),
+                    size,
                     workspace,
                 })
                 .await?;

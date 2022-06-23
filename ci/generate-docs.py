@@ -44,19 +44,15 @@ class Gen(object):
             if self.index:
                 idx.write(self.index)
                 idx.write("\n\n")
+            else:
+                try:
+                    with open(f"{self.dirname}/index.markdown", "r") as f:
+                        idx.write(f.read())
+                        idx.write("\n\n")
+                except FileNotFoundError:
+                    pass
             for page in children:
                 idx.write(f"  - [{page.title}]({page.title}.md)\n")
-
-
-def image_dimensions(filename):
-    try:
-        out = subprocess.check_output(["identify", filename])
-        fields = out.split()
-        while fields[0] != b"PNG":
-            fields = fields[1:]
-        return [int(x) for x in fields[1].split(b"x")]
-    except FileNotFoundError:
-        return [100, 100]
 
 
 class GenColorScheme(object):
@@ -79,12 +75,11 @@ class GenColorScheme(object):
             with open(scheme_filename, "w") as idx:
                 images = sorted(glob.glob(f"{scheme_prefix}/*.png"))
                 for img in images:
-                    width, height = image_dimensions(img)
                     img = os.path.basename(img)
                     title = os.path.basename(img).rsplit(".", 1)[0]
                     idx.write(f"# {title}\n")
                     idx.write(
-                        f'<img width="{width}" height="{height}" src="{img}" alt="{title}">\n\n'
+                        f'<img src="{img}" alt="{title}">\n\n'
                     )
                     idx.write("To use this scheme, add this to your config:\n")
                     idx.write(
@@ -138,6 +133,7 @@ TOC = [
                     Page("Key Binding", "config/keys.md"),
                     Page("Key Tables", "config/key-tables.md"),
                     Page("Default Key Assignments", "config/default-keys.md"),
+                    Page("Keyboard Encoding", "config/key-encoding.md"),
                     Page("Mouse Binding", "config/mouse.md"),
                     Page("Colors & Appearance", "config/appearance.md"),
                     GenColorScheme("Color Schemes", "colorschemes"),
@@ -156,6 +152,7 @@ TOC = [
             Page("F.A.Q.", "faq.md"),
             Page("Getting Help", "help.md"),
             Page("Contributing", "contributing.md"),
+            Page("CLI Reference", "cli/general.md", children=[Gen("cli", "cli/cli")]),
             Page(
                 "Lua Reference",
                 "config/lua/general.md",
@@ -163,63 +160,23 @@ TOC = [
                     Gen(
                         "module: wezterm",
                         "config/lua/wezterm",
-                        index="""
-# `require wezterm`
-
-The wezterm module is the primary module that exposes wezterm configuration
-and control to your config file.
-
-You will typically place:
-
-```lua
-local wezterm = require 'wezterm';
-```
-
-at the top of your configuration file to enable it.
-
-## Available functions, constants
-""",
+                    ),
+                    Gen(
+                        "module: wezterm.mux",
+                        "config/lua/wezterm.mux",
                     ),
                     Gen(
                         "struct: Config",
                         "config/lua/config",
-                        index="""
-# `Config` struct
-
-The `return` statement at the end of your `wezterm.lua` file returns
-a table that is interpreted as the internal `Config` struct type.
-
-This section documents the various available fields in the config
-struct.
-
-At the time of writing, it is not a complete list!
-
-""",
                     ),
                     Gen(
                         "enum: KeyAssignment",
                         "config/lua/keyassignment",
-                        index="""
-# `KeyAssignment` enumeration
-
-A `KeyAssignment` represents a pre-defined function that can be applied
-to control the Window, Tab, Pane state typically when a key or mouse event
-is triggered.
-
-Internally, in the underlying Rust code, `KeyAssignment` is an enum
-type with a variant for each possible action known to wezterm.  In Lua,
-enums get represented as a table with a single key corresponding to
-the variant name.
-
-In most cases the [`wezterm.action`](../wezterm/action.md) function is
-used to create an instance of `KeyAssignment` and make it a bit more
-clear and convenient.
-
-## Available Key Assignments
-
-""",
                     ),
                     Page("object: LocalProcessInfo", "config/lua/LocalProcessInfo.md"),
+                    Page("object: MuxWindow", "config/lua/MuxWindow.md"),
+                    Page("object: MuxTab", "config/lua/MuxTab.md"),
+                    Page("object: MuxPane", "config/lua/MuxPane.md"),
                     Page("object: PaneInformation", "config/lua/PaneInformation.md"),
                     Page("object: TabInformation", "config/lua/TabInformation.md"),
                     Page("object: SshDomain", "config/lua/SshDomain.md"),
@@ -229,54 +186,23 @@ clear and convenient.
                     Gen(
                         "object: Pane",
                         "config/lua/pane",
-                        index="""
-# `Pane` object
-
-A Pane object cannot be created in lua code; it is typically passed to your
-code via an event callback.  A Pane object is a handle to a live instance of a
-Pane that is known to the wezterm process.  A Pane object tracks the psuedo
-terminal (or real serial terminal) and associated process(es) and the parsed
-screen and scrollback.
-
-A Pane object can be used to send input to the associated processes and
-introspect the state of the terminal emulation for that pane.
-
-## Available methods
-
-""",
                     ),
                     Gen(
                         "object: Window",
                         "config/lua/window",
-                        index="""
-# `Window` object
-
-A Window object cannot be created in lua code; it is typically passed to
-your code via an event callback.  A Window object is a handle to a GUI
-TermWindow running in the wezterm process.
-
-## Available methods
-
-""",
                     ),
                     Page("object: WslDomain", "config/lua/WslDomain.md"),
                     Gen(
+                        "events: Gui",
+                        "config/lua/gui-events",
+                    ),
+                    Gen(
                         "events: Multiplexer",
                         "config/lua/mux-events",
-                        index="""
-# Events emitted by the Multiplexer
-
-The following events can be handled using [wezterm.on](../wezterm/on.md):
-""",
                     ),
                     Gen(
                         "events: Window",
                         "config/lua/window-events",
-                        index="""
-# Events emitted by the `Window` object
-
-The following events can be handled using [wezterm.on](../wezterm/on.md):
-""",
                     ),
                 ],
             ),

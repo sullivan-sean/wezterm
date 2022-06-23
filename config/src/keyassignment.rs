@@ -130,7 +130,7 @@ impl Default for Pattern {
 }
 
 /// A mouse event that can trigger an action
-#[derive(Debug, Clone, PartialEq, Eq, Hash, FromDynamic, ToDynamic)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, FromDynamic, ToDynamic)]
 pub enum MouseEventTrigger {
     /// Mouse button is pressed. streak is how many times in a row
     /// it was pressed.
@@ -434,12 +434,13 @@ pub enum CopyModeAssignment {
     MoveToViewportMiddle,
     MoveToScrollbackTop,
     MoveToScrollbackBottom,
-    ToggleSelectionByCell,
     SetSelectionMode(Option<SelectionMode>),
     MoveToStartOfLineContent,
     MoveToEndOfLineContent,
     MoveToStartOfLine,
     MoveToStartOfNextLine,
+    MoveToSelectionOtherEnd,
+    MoveToSelectionOtherEndHoriz,
     MoveBackwardWord,
     MoveForwardWord,
     MoveRight,

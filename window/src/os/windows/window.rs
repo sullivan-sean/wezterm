@@ -2091,13 +2091,23 @@ impl KeyboardLayoutInfo {
         self.has_alt_gr
     }
 
+    /// Similar to Modifiers::remove_positional_mods except that it preserves
+    /// RIGHT_ALT
+    fn fixup_mods(mods: Modifiers) -> Modifiers {
+        mods - (Modifiers::LEFT_SHIFT
+            | Modifiers::RIGHT_SHIFT
+            | Modifiers::LEFT_CTRL
+            | Modifiers::RIGHT_CTRL
+            | Modifiers::LEFT_ALT)
+    }
+
     pub fn is_dead_key_leader(&mut self, mods: Modifiers, vk: u32) -> Option<char> {
         unsafe {
             self.update();
         }
         if vk <= u8::MAX.into() {
             self.dead_keys
-                .get(&(mods, vk as u8))
+                .get(&(Self::fixup_mods(mods), vk as u8))
                 .map(|dead| dead.dead_char)
         } else {
             None
@@ -2113,8 +2123,15 @@ impl KeyboardLayoutInfo {
             self.update();
         }
         if leader.1 <= u8::MAX.into() && key.1 <= u8::MAX.into() {
-            if let Some(dead) = self.dead_keys.get(&(leader.0, leader.1 as u8)) {
-                if let Some(c) = dead.map.get(&(key.0, key.1 as u8)).map(|&c| c) {
+            if let Some(dead) = self
+                .dead_keys
+                .get(&(Self::fixup_mods(leader.0), leader.1 as u8))
+            {
+                if let Some(c) = dead
+                    .map
+                    .get(&(Self::fixup_mods(key.0), key.1 as u8))
+                    .map(|&c| c)
+                {
                     ResolvedDeadKey::Combined(c)
                 } else {
                     ResolvedDeadKey::InvalidCombination(dead.dead_char)
@@ -2435,12 +2452,7 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
                 );
 
                 match res {
-                    1 => {
-                        // Remove our AltGr placeholder modifier flag now that the
-                        // key press has been expanded.
-                        modifiers.remove(Modifiers::RIGHT_ALT);
-                        Some(KeyCode::Char(std::char::from_u32_unchecked(out[0] as u32)))
-                    }
+                    1 => Some(KeyCode::Char(std::char::from_u32_unchecked(out[0] as u32))),
                     // No mapping, so use our raw info
                     0 => {
                         log::trace!(
@@ -2458,7 +2470,15 @@ unsafe fn key(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<L
                         // as -1 indicates the start of a dead key sequence,
                         // and any other n > 1 indicates an ambiguous expansion.
                         // Either way, indicate that we don't have a valid result.
-                        log::error!("unexpected dead key expansion: {:?}", out);
+                        log::error!(
+                            "unexpected dead key expansion: \
+                             modifiers={:?} vk={:?} res={} releasing={} {:?}",
+                            modifiers,
+                            vk,
+                            res,
+                            releasing,
+                            out
+                        );
                         KeyboardLayoutInfo::clear_key_state();
                         None
                     }
